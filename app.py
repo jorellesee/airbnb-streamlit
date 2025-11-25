@@ -15,148 +15,11 @@ import shutil
 warnings.filterwarnings('ignore')
 
 # ============================================================================
-# CHECK R INSTALLATION & PACKAGES
+# MODEL INITIALIZATION - PURE PYTHON (No R Dependencies!)
 # ============================================================================
 
-def check_r_installed():
-    """Check if R is installed on the system"""
-    r_executable = shutil.which('R')
-    return r_executable is not None
-
-@st.cache_resource
-def ensure_r_packages():
-    """Install and verify R packages are loaded (cached across reruns)
-
-    Returns: (success: bool, messages: list of str)
-    """
-    import os
-    from datetime import datetime
-
-    messages = []
-    try:
-        from rpy2.robjects.packages import importr
-        from rpy2 import robjects as ro
-
-        packages = ["tidymodels", "tune"]
-        start_time = datetime.now()
-        messages.append(f"🕐 Starting package installation at {start_time.strftime('%H:%M:%S')}")
-
-        # Set up writable R library directory (critical for Streamlit Cloud)
-        r_lib_dir = os.path.expanduser("~/R_libs")
-        os.makedirs(r_lib_dir, exist_ok=True)
-        messages.append(f"✅ R library directory ready: ~/R_libs")
-
-        # Configure R to use writable library path
-        ro.r(f'.libPaths(c("{r_lib_dir}", .libPaths()))')
-        messages.append(f"✅ Configured R library path")
-
-        installed_count = 0
-        loaded_count = 0
-
-        for i, pkg in enumerate(packages, 1):
-            try:
-                # Try to load package silently
-                importr(pkg)
-                messages.append(f"✅ Package {i}/{len(packages)}: '{pkg}' already loaded")
-                loaded_count += 1
-            except Exception as load_error:
-                messages.append(f"⏳ Package {i}/{len(packages)}: '{pkg}' not found, installing...")
-                # Package missing - install without dependencies to minimize compilation
-                try:
-                    ro.r(f'''
-                    options(timeout=600)
-                    suppressWarnings(suppressMessages(
-                        install.packages("{pkg}",
-                                        lib="{r_lib_dir}",
-                                        repos="https://cloud.r-project.org/",
-                                        dependencies=FALSE,
-                                        quiet=TRUE)
-                    ))
-                    ''')
-                    # Verify installation
-                    importr(pkg)
-                    messages.append(f"✅ Package {i}/{len(packages)}: '{pkg}' installed successfully")
-                    installed_count += 1
-                    loaded_count += 1
-                except Exception as install_error:
-                    messages.append(f"⚠️  Package {i}/{len(packages)}: '{pkg}' installation failed: {str(install_error)[:60]}")
-                    # Continue anyway - app might work with partial packages
-
-        elapsed = (datetime.now() - start_time).total_seconds()
-        messages.append(f"✅ Installation complete in {elapsed:.1f}s ({loaded_count} loaded, {installed_count} newly installed)")
-        return True, messages
-
-    except Exception as e:
-        messages.append(f"❌ Error during package installation: {str(e)[:100]}")
-        return False, messages
-
-r_is_installed = check_r_installed()
-
-if not r_is_installed:
-    st.error("""
-    ❌ **R is not installed on this system**
-
-    This app requires R and the following R packages:
-    - tidymodels
-    - stats
-    - tune
-
-    ### To install R:
-    - **macOS**: `brew install r`
-    - **Ubuntu/Debian**: `sudo apt-get install r-base r-base-dev`
-    - **Windows**: Download from https://cran.r-project.org/bin/windows/base/
-
-    ### After installing R, install R packages:
-    ```r
-    install.packages("tidymodels")
-    install.packages("tune")
-    ```
-
-    After installation, please restart this app.
-    """)
-
-    # Diagnostic info
-    with st.expander("📋 Diagnostic Information"):
-        st.write("**System Information:**")
-        try:
-            import platform
-            st.write(f"- Platform: {platform.system()}")
-            st.write(f"- Architecture: {platform.machine()}")
-            st.write(f"- Python: {platform.python_version()}")
-        except:
-            pass
-
-        st.write("**R Status:**")
-        st.write(f"- R executable found: {r_is_installed}")
-        st.write(f"- PATH location: {shutil.which('R')}")
-
-        st.write("**If using Streamlit Cloud:**")
-        st.write("Ensure `packages.txt` in your repo root contains:")
-        st.code("""r-base
-r-base-dev""", language="text")
-        st.write("(The file should be at the repo root, NOT in the app directory)")
-
-    st.stop()
-else:
-    # Package installation with real-time feedback
-    if 'packages_loaded' not in st.session_state:
-        st.session_state.packages_loaded = False
-        st.session_state.package_messages = []
-
-    # Call cached function and capture messages
-    try:
-        success, messages = ensure_r_packages()
-        st.session_state.packages_loaded = success
-        st.session_state.package_messages = messages
-    except Exception as e:
-        st.session_state.packages_loaded = False
-        st.session_state.package_messages = [f"❌ Unexpected error: {str(e)[:100]}"]
-
-    # Display installation feedback to user
-    if st.session_state.package_messages:
-        with st.expander("📦 Package Installation Status", expanded=(not st.session_state.packages_loaded)):
-            for msg in st.session_state.package_messages:
-                st.write(msg)
+import xgboost as xgb
+import json
 
 # Set page config
 st.set_page_config(
@@ -167,91 +30,56 @@ st.set_page_config(
 )
 
 # ============================================================================
-# MODEL LOADING (Using rpy2 to load RDS files directly)
+# MODEL LOADING - PURE PYTHON (No R Dependencies!)
 # ============================================================================
 
 @st.cache_resource
-def load_models_from_rds():
-    """Load pre-trained models directly from RDS files using rpy2"""
+def load_xgboost_model():
+    """Load pre-trained XGBoost model from native Python format"""
     try:
-        from rpy2.robjects.packages import importr
-
-        # Get models path - models are in ./models/ (same directory as app.py)
         script_dir = Path(__file__).parent.absolute()
         models_path = script_dir / "models"
 
-        # Check path exists
         if not models_path.exists():
             st.error(f"❌ Models directory not found at {models_path}")
             return None, None, False
 
-        # Load models using rpy2
-        base = importr('base')
+        # Load XGBoost model (native Python format, no R needed!)
+        model_file = str(models_path / "occupancy_model.xgb")
+        occupancy_model = xgb.Booster(model_name="gbtree")
+        occupancy_model.load_model(model_file)
 
-        # Load occupancy model
-        model_file = str(models_path / "occupancy_model_final.rds")
-        occupancy_model = base.readRDS(model_file)
-
-        # Default values for neighborhoods, property types, and test metrics
-        neighborhoods = ["Duomo", "Brera", "Navigli", "Centro Storico", "Corso Como"]
-        property_types = ["Entire home/apt", "Private room"]
-        test_metrics = {'rmse': 0.163, 'mae': 0.131, 'rsq': 0.504}
+        # Load metadata
+        metadata_file = str(models_path / "model_metadata.json")
+        with open(metadata_file, 'r') as f:
+            metadata = json.load(f)
 
         model_info_dict = {
-            'neighborhoods': neighborhoods,
-            'property_types': property_types,
-            'test_metrics': test_metrics
+            'neighborhoods': ["Duomo", "Brera", "Navigli", "Centro Storico", "Corso Como"],
+            'property_types': ["Entire home/apt", "Private room"],
+            'test_metrics': metadata['test_metrics'],
+            'feature_list': metadata['feature_list']
         }
 
         return occupancy_model, model_info_dict, True
 
     except Exception as e:
-        st.warning(f"⚠️ Error loading RDS models with rpy2: {str(e)}")
+        st.warning(f"⚠️ Error loading models: {str(e)}")
         return None, None, False
 
 
-@st.cache_resource
-def load_models_from_csv():
-    """Fallback: Load metadata from CSV (requires manual data export)"""
-    try:
-        models_path = Path(__file__).parent / "models"
-
-        # Load neighborhoods and property types from CSV
-        neighborhoods = pd.read_csv(models_path / "neighborhoods.csv")['neighbourhood'].tolist() if (models_path / "neighborhoods.csv").exists() else []
-        property_types = pd.read_csv(models_path / "property_types.csv")['property_type'].tolist() if (models_path / "property_types.csv").exists() else []
-
-        # Load metrics from JSON
-        if (models_path / "test_metrics.json").exists():
-            with open(models_path / "test_metrics.json") as f:
-                test_metrics = json.load(f)
-        else:
-            test_metrics = {'rmse': 0.163, 'mae': 0.131, 'rsq': 0.504}
-
-        model_info_dict = {
-            'neighborhoods': sorted(neighborhoods) if neighborhoods else ["Duomo", "Brera", "Navigli"],
-            'property_types': sorted(property_types) if property_types else ["Entire home/apt", "Private room"],
-            'test_metrics': test_metrics
-        }
-
-        return None, model_info_dict, False
-
-    except Exception as e:
-        st.error(f"❌ Could not load models: {e}")
-        return None, None, False
-
-
-# Try loading models
-occupancy_model, model_info, models_loaded = load_models_from_rds()
+# Load models
+occupancy_model, model_info, models_loaded = load_xgboost_model()
 
 if not models_loaded or model_info is None:
-    st.error("❌ Could not load models. Please ensure occupancy_model_final.rds exists in ./models/")
+    st.error("❌ Could not load models. Please ensure occupancy_model.xgb exists in ./models/")
     model_info = {
         'neighborhoods': ["Duomo", "Brera", "Navigli", "Centro Storico"],
         'property_types': ["Entire home/apt", "Private room"],
         'test_metrics': {'rmse': 0.163, 'mae': 0.131, 'rsq': 0.504}
     }
 else:
-    st.success("✅ Models loaded successfully from RDS")
+    st.success("✅ Models loaded successfully (Pure Python - No R Dependencies!)")
 
 # ============================================================================
 # INITIALIZE SESSION STATE FOR PRICE OPTIMIZATION
@@ -419,33 +247,27 @@ if page == "🎯 Predictor":
                     'quality_rating': [quality_rating]
                 })
 
-                # Make prediction using R model via rpy2
-                from rpy2.robjects import conversion, pandas2ri
-                from rpy2 import robjects as ro
+                # Make prediction using Python XGBoost (no R needed!)
+                # Ensure feature order matches training data
+                feature_list = model_info.get('feature_list', [
+                    'number_of_reviews', 'property_type', 'host_has_profile_pic', 'host_is_superhost',
+                    'minimum_nights', 'host_phone_verification', 'host_work_email_verification',
+                    'instant_bookable', 'review_scores_value', 'host_email_verification',
+                    'amenities_count', 'host_identity_verified', 'calculated_host_listings_count',
+                    'accommodates', 'review_scores_cleanliness', 'price', 'review_scores_location',
+                    'maximum_nights', 'beds', 'review_scores_communication', 'review_scores_rating',
+                    'neighbourhood_cleansed', 'bathrooms', 'bedrooms', 'quality_rating'
+                ])
 
-                # Load required R libraries for tidymodels prediction
-                ro.r('library(stats)')
-                ro.r('library(tidymodels)')
-                ro.r('library(tune)')
+                # Prepare data in correct feature order
+                X = input_data[feature_list].values
 
-                # Convert pandas DataFrame to R DataFrame using localconverter
-                with ro.conversion.localconverter(ro.default_converter + pandas2ri.converter):
-                    r_input = conversion.py2rpy(input_data)
+                # Make prediction with XGBoost
+                dmatrix = xgb.DMatrix(X)
+                occupancy_pred = float(occupancy_model.predict(dmatrix)[0])
 
-                    # Make prediction using the S3 predict method
-                    predict_func = ro.r('predict')
-                    r_pred = predict_func(occupancy_model, new_data=r_input)
-
-                    # Convert back to Python
-                    pred_values = conversion.rpy2py(r_pred)
-
-                # Extract occupancy prediction
-                if isinstance(pred_values, pd.DataFrame):
-                    occupancy_pred = float(pred_values.iloc[0, 0])
-                elif isinstance(pred_values, (list, np.ndarray)):
-                    occupancy_pred = float(pred_values[0])
-                else:
-                    occupancy_pred = float(pred_values)
+                # Clamp occupancy between 0 and 1
+                occupancy_pred = max(0, min(1, occupancy_pred))
 
                 # Display results
                 st.divider()
@@ -566,10 +388,16 @@ elif page == "💰 Price Optimization":
                 # Generate price range
                 prices = np.arange(opt_price_min, opt_price_max + opt_step, opt_step)
 
-                # Load R libraries
-                ro.r('library(stats)')
-                ro.r('library(tidymodels)')
-                ro.r('library(tune)')
+                # Get feature list for correct ordering
+                feature_list = model_info.get('feature_list', [
+                    'number_of_reviews', 'property_type', 'host_has_profile_pic', 'host_is_superhost',
+                    'minimum_nights', 'host_phone_verification', 'host_work_email_verification',
+                    'instant_bookable', 'review_scores_value', 'host_email_verification',
+                    'amenities_count', 'host_identity_verified', 'calculated_host_listings_count',
+                    'accommodates', 'review_scores_cleanliness', 'price', 'review_scores_location',
+                    'maximum_nights', 'beds', 'review_scores_communication', 'review_scores_rating',
+                    'neighbourhood_cleansed', 'bathrooms', 'bedrooms', 'quality_rating'
+                ])
 
                 results_data = []
 
@@ -605,20 +433,10 @@ elif page == "💰 Price Optimization":
                             'quality_rating': [quality_rating]
                         })
 
-                        # Make prediction
-                        with ro.conversion.localconverter(ro.default_converter + pandas2ri.converter):
-                            r_input = conversion.py2rpy(pred_data)
-                            predict_func = ro.r('predict')
-                            r_pred = predict_func(occupancy_model, new_data=r_input)
-                            pred_values = conversion.rpy2py(r_pred)
-
-                        # Extract occupancy
-                        if isinstance(pred_values, pd.DataFrame):
-                            occupancy = float(pred_values.iloc[0, 0])
-                        elif isinstance(pred_values, (list, np.ndarray)):
-                            occupancy = float(pred_values[0])
-                        else:
-                            occupancy = float(pred_values)
+                        # Make prediction with XGBoost (pure Python)
+                        X = pred_data[feature_list].values
+                        dmatrix = xgb.DMatrix(X)
+                        occupancy = float(occupancy_model.predict(dmatrix)[0])
 
                         # Cap occupancy between 0 and 1
                         occupancy = max(0, min(1, occupancy))
