@@ -44,13 +44,34 @@ def load_r_model():
             st.error(f"❌ Models directory not found at {models_path}")
             return None, None, False
 
-        # Initialize R environment
-        ro.r('library(tidymodels)')
-        ro.r('library(tune)')
-
         # Load R model files
         model_file = str(models_path / "occupancy_model_final.rds")
         info_file = str(models_path / "occupancy_model_info.rds")
+
+        # Verify files exist
+        if not Path(model_file).exists():
+            st.error(f"❌ Model file not found: {model_file}")
+            return None, None, False
+
+        if not Path(info_file).exists():
+            st.error(f"❌ Info file not found: {info_file}")
+            return None, None, False
+
+        # Initialize R environment with better error handling
+        try:
+            ro.r('library(tidymodels)')
+        except Exception as e:
+            st.warning(f"⚠️ Loading tidymodels failed: {str(e)[:100]}")
+            # Try installing if not available
+            st.info("Installing tidymodels from CRAN...")
+            ro.r('options(repos = list(CRAN = "https://cloud.r-project.org"))')
+            ro.r('install.packages("tidymodels")')
+            ro.r('library(tidymodels)')
+
+        try:
+            ro.r('library(tune)')
+        except:
+            pass  # tune is optional, comes with tidymodels
 
         # Load models into R environment
         ro.r(f'''
@@ -71,7 +92,8 @@ def load_r_model():
         return True, model_info_dict, True
 
     except Exception as e:
-        st.warning(f"⚠️ Error loading models: {str(e)[:100]}")
+        error_msg = str(e)
+        st.warning(f"⚠️ Error loading models: {error_msg[:200]}")
         return None, None, False
 
 
