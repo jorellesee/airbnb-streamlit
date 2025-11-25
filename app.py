@@ -23,7 +23,7 @@ def check_r_installed():
     r_executable = shutil.which('R')
     return r_executable is not None
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource
 def ensure_r_packages():
     """Install and verify R packages are loaded (cached across reruns)"""
     try:
@@ -40,40 +40,31 @@ def ensure_r_packages():
         # Configure R to use writable library path
         ro.r(f'.libPaths(c("{r_lib_dir}", .libPaths()))')
 
-        status_messages = []
-
         for pkg in packages:
             try:
+                # Try to load package silently
                 importr(pkg)
-                status_messages.append((pkg, "already_loaded"))
-            except:
-                # Package not found, install it with optimization
+            except Exception:
+                # Package missing - install without dependencies to minimize compilation
                 try:
-                    # Try using pak first (much faster), fall back to install.packages
-                    try:
-                        # pak::pak() is faster than install.packages
-                        ro.r(f'''
-                        if (!require("pak", quietly=TRUE)) {{
-                            install.packages("pak", lib="{r_lib_dir}", repos="https://cloud.r-project.org/", quiet=TRUE)
-                        }}
-                        pak::pak("{pkg}", lib="{r_lib_dir}")
-                        ''')
-                    except:
-                        # Fallback: use install.packages without dependencies
-                        # Dependencies=FALSE prevents building heavy transitive deps from source
-                        ro.r(f'''
-                        options(timeout=300)
-                        install.packages("{pkg}", lib="{r_lib_dir}", repos="https://cloud.r-project.org/", dependencies=FALSE, quiet=TRUE)
-                        ''')
-
+                    ro.r(f'''
+                    options(timeout=600)
+                    suppressWarnings(suppressMessages(
+                        install.packages("{pkg}",
+                                        lib="{r_lib_dir}",
+                                        repos="https://cloud.r-project.org/",
+                                        dependencies=FALSE,
+                                        quiet=TRUE)
+                    ))
+                    ''')
+                    # Verify installation
                     importr(pkg)
-                    status_messages.append((pkg, "installed"))
-                except Exception as install_err:
-                    status_messages.append((pkg, f"failed: {str(install_err)[:50]}"))
+                except Exception as e:
+                    pass  # Continue anyway
 
-        return True, status_messages
+        return True
     except Exception as e:
-        return False, [(f"Error: {str(e)[:100]}", "error")]
+        return False
 
 r_is_installed = check_r_installed()
 
@@ -124,9 +115,7 @@ r-base-dev""", language="text")
     st.stop()
 else:
     # Ensure required R packages are installed (cached, runs only once per container)
-    success, messages = ensure_r_packages()
-    if not success:
-        st.warning("⚠️ Warning: Some R packages could not be loaded. The app may have limited functionality.")
+    ensure_r_packages()
 
 # Set page config
 st.set_page_config(
