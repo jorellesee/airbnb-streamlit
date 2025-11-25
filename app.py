@@ -1,7 +1,7 @@
 """
 Occupancy & Price Optimizer - Streamlit App
 Predicts occupancy rates and finds optimal pricing for Airbnb listings
-Uses trained XGBoost models from RDS files via rpy2
+Uses trained XGBoost models (pure Python, no R dependencies)
 """
 
 import streamlit as st
@@ -19,7 +19,6 @@ warnings.filterwarnings('ignore')
 # ============================================================================
 
 import xgboost as xgb
-import json
 
 # Set page config
 st.set_page_config(
@@ -357,9 +356,6 @@ elif page == "💰 Price Optimization":
     if st.button("🎯 Find Optimal Price", use_container_width=True, type="primary"):
         if models_loaded:
             try:
-                from rpy2.robjects import conversion, pandas2ri
-                from rpy2 import robjects as ro
-
                 # Get values from session state
                 maximum_nights = st.session_state['pred_maximum_nights']
                 minimum_nights = st.session_state['pred_minimum_nights']
