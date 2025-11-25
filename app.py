@@ -1,7 +1,7 @@
 """
 Occupancy & Price Optimizer - Streamlit App
 Predicts occupancy rates and finds optimal pricing for Airbnb listings
-Uses trained XGBoost models (pure Python, no R dependencies)
+Uses trained XGBoost model via R tidymodels (feature engineering via rpy2)
 """
 
 import streamlit as st
@@ -15,10 +15,11 @@ import shutil
 warnings.filterwarnings('ignore')
 
 # ============================================================================
-# MODEL INITIALIZATION - PURE PYTHON (No R Dependencies!)
+# MODEL INITIALIZATION - R BACKEND VIA rpy2
 # ============================================================================
 
-import xgboost as xgb
+from rpy2.robjects import conversion, pandas2ri
+from rpy2 import robjects as ro
 
 # Set page config
 st.set_page_config(
@@ -29,12 +30,12 @@ st.set_page_config(
 )
 
 # ============================================================================
-# MODEL LOADING - PURE PYTHON (No R Dependencies!)
+# MODEL LOADING - R BACKEND VIA rpy2
 # ============================================================================
 
 @st.cache_resource
-def load_xgboost_model():
-    """Load pre-trained XGBoost model from native Python format"""
+def load_r_model():
+    """Load pre-trained R tidymodels model via rpy2"""
     try:
         script_dir = Path(__file__).parent.absolute()
         models_path = script_dir / "models"
@@ -43,42 +44,49 @@ def load_xgboost_model():
             st.error(f"❌ Models directory not found at {models_path}")
             return None, None, False
 
-        # Load XGBoost model (native Python format, no R needed!)
-        model_file = str(models_path / "occupancy_model.xgb")
-        occupancy_model = xgb.Booster()
-        occupancy_model.load_model(model_file)
+        # Initialize R environment
+        ro.r('library(tidymodels)')
+        ro.r('library(tune)')
 
-        # Load metadata
-        metadata_file = str(models_path / "model_metadata.json")
-        with open(metadata_file, 'r') as f:
-            metadata = json.load(f)
+        # Load R model files
+        model_file = str(models_path / "occupancy_model_final.rds")
+        info_file = str(models_path / "occupancy_model_info.rds")
+
+        # Load models into R environment
+        ro.r(f'''
+        occupancy_model <- readRDS("{model_file}")
+        model_info <- readRDS("{info_file}")
+        ''')
+
+        # Extract neighborhoods and property types from training data
+        neighborhoods = list(ro.r('sort(unique(model_info$train_data$neighbourhood_cleansed))'))
+        property_types = list(ro.r('sort(unique(model_info$train_data$property_type))'))
 
         model_info_dict = {
-            'neighborhoods': ["Duomo", "Brera", "Navigli", "Centro Storico", "Corso Como"],
-            'property_types': ["Entire home/apt", "Private room"],
-            'test_metrics': metadata['test_metrics'],
-            'feature_list': metadata['feature_list']
+            'neighborhoods': neighborhoods,
+            'property_types': property_types,
+            'test_metrics': {'rmse': 0.1633, 'mae': 0.1309, 'rsq': 0.5037}
         }
 
-        return occupancy_model, model_info_dict, True
+        return True, model_info_dict, True
 
     except Exception as e:
-        st.warning(f"⚠️ Error loading models: {str(e)}")
+        st.warning(f"⚠️ Error loading models: {str(e)[:100]}")
         return None, None, False
 
 
 # Load models
-occupancy_model, model_info, models_loaded = load_xgboost_model()
+models_ready, model_info, models_loaded = load_r_model()
 
 if not models_loaded or model_info is None:
-    st.error("❌ Could not load models. Please ensure occupancy_model.xgb exists in ./models/")
+    st.error("❌ Could not load R models. Please ensure occupancy_model_final.rds exists in ./models/")
     model_info = {
         'neighborhoods': ["Duomo", "Brera", "Navigli", "Centro Storico"],
         'property_types': ["Entire home/apt", "Private room"],
         'test_metrics': {'rmse': 0.163, 'mae': 0.131, 'rsq': 0.504}
     }
 else:
-    st.success("✅ Models loaded successfully (Pure Python - No R Dependencies!)")
+    st.success("✅ Models loaded successfully (R tidymodels + rpy2)")
 
 # ============================================================================
 # INITIALIZE SESSION STATE FOR PRICE OPTIMIZATION
@@ -246,24 +254,22 @@ if page == "🎯 Predictor":
                     'quality_rating': [quality_rating]
                 })
 
-                # Make prediction using Python XGBoost (no R needed!)
-                # Ensure feature order matches training data
-                feature_list = model_info.get('feature_list', [
-                    'number_of_reviews', 'property_type', 'host_has_profile_pic', 'host_is_superhost',
-                    'minimum_nights', 'host_phone_verification', 'host_work_email_verification',
-                    'instant_bookable', 'review_scores_value', 'host_email_verification',
-                    'amenities_count', 'host_identity_verified', 'calculated_host_listings_count',
-                    'accommodates', 'review_scores_cleanliness', 'price', 'review_scores_location',
-                    'maximum_nights', 'beds', 'review_scores_communication', 'review_scores_rating',
-                    'neighbourhood_cleansed', 'bathrooms', 'bedrooms', 'quality_rating'
-                ])
+                # Make prediction using R tidymodels (via rpy2)
+                try:
+                    # Convert pandas dataframe to R dataframe via rpy2
+                    pandas2ri.activate()
+                    ro.globalenv['input_data'] = input_data
 
-                # Prepare data in correct feature order
-                X = input_data[feature_list].values
+                    # Call R predict function on tidymodels workflow
+                    ro.r('''
+                    pred_result <- predict(occupancy_model, input_data, type = "numeric")
+                    occupancy_pred_r <- as.numeric(pred_result$.pred[1])
+                    ''')
 
-                # Make prediction with XGBoost
-                dmatrix = xgb.DMatrix(X)
-                occupancy_pred = float(occupancy_model.predict(dmatrix)[0])
+                    occupancy_pred = float(ro.r('occupancy_pred_r')[0])
+                except Exception as e:
+                    st.error(f"❌ Prediction error: {str(e)}")
+                    occupancy_pred = 0.5
 
                 # Clamp occupancy between 0 and 1
                 occupancy_pred = max(0, min(1, occupancy_pred))
@@ -384,17 +390,6 @@ elif page == "💰 Price Optimization":
                 # Generate price range
                 prices = np.arange(opt_price_min, opt_price_max + opt_step, opt_step)
 
-                # Get feature list for correct ordering
-                feature_list = model_info.get('feature_list', [
-                    'number_of_reviews', 'property_type', 'host_has_profile_pic', 'host_is_superhost',
-                    'minimum_nights', 'host_phone_verification', 'host_work_email_verification',
-                    'instant_bookable', 'review_scores_value', 'host_email_verification',
-                    'amenities_count', 'host_identity_verified', 'calculated_host_listings_count',
-                    'accommodates', 'review_scores_cleanliness', 'price', 'review_scores_location',
-                    'maximum_nights', 'beds', 'review_scores_communication', 'review_scores_rating',
-                    'neighbourhood_cleansed', 'bathrooms', 'bedrooms', 'quality_rating'
-                ])
-
                 results_data = []
 
                 # Test each price point
@@ -429,10 +424,17 @@ elif page == "💰 Price Optimization":
                             'quality_rating': [quality_rating]
                         })
 
-                        # Make prediction with XGBoost (pure Python)
-                        X = pred_data[feature_list].values
-                        dmatrix = xgb.DMatrix(X)
-                        occupancy = float(occupancy_model.predict(dmatrix)[0])
+                        # Make prediction using R tidymodels (via rpy2)
+                        try:
+                            pandas2ri.activate()
+                            ro.globalenv['pred_data'] = pred_data
+                            ro.r('''
+                            pred_result <- predict(occupancy_model, pred_data, type = "numeric")
+                            occupancy_pred_r <- as.numeric(pred_result$.pred[1])
+                            ''')
+                            occupancy = float(ro.r('occupancy_pred_r')[0])
+                        except Exception:
+                            occupancy = 0.5
 
                         # Cap occupancy between 0 and 1
                         occupancy = max(0, min(1, occupancy))
