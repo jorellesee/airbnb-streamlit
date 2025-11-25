@@ -25,26 +25,42 @@ def check_r_installed():
 
 @st.cache_resource
 def ensure_r_packages():
-    """Install and verify R packages are loaded (cached across reruns)"""
+    """Install and verify R packages are loaded (cached across reruns)
+
+    Returns: (success: bool, messages: list of str)
+    """
+    import os
+    from datetime import datetime
+
+    messages = []
     try:
         from rpy2.robjects.packages import importr
         from rpy2 import robjects as ro
-        import os
 
         packages = ["tidymodels", "tune"]
+        start_time = datetime.now()
+        messages.append(f"🕐 Starting package installation at {start_time.strftime('%H:%M:%S')}")
 
         # Set up writable R library directory (critical for Streamlit Cloud)
         r_lib_dir = os.path.expanduser("~/R_libs")
         os.makedirs(r_lib_dir, exist_ok=True)
+        messages.append(f"✅ R library directory ready: ~/R_libs")
 
         # Configure R to use writable library path
         ro.r(f'.libPaths(c("{r_lib_dir}", .libPaths()))')
+        messages.append(f"✅ Configured R library path")
 
-        for pkg in packages:
+        installed_count = 0
+        loaded_count = 0
+
+        for i, pkg in enumerate(packages, 1):
             try:
                 # Try to load package silently
                 importr(pkg)
-            except Exception:
+                messages.append(f"✅ Package {i}/{len(packages)}: '{pkg}' already loaded")
+                loaded_count += 1
+            except Exception as load_error:
+                messages.append(f"⏳ Package {i}/{len(packages)}: '{pkg}' not found, installing...")
                 # Package missing - install without dependencies to minimize compilation
                 try:
                     ro.r(f'''
@@ -59,12 +75,20 @@ def ensure_r_packages():
                     ''')
                     # Verify installation
                     importr(pkg)
-                except Exception as e:
-                    pass  # Continue anyway
+                    messages.append(f"✅ Package {i}/{len(packages)}: '{pkg}' installed successfully")
+                    installed_count += 1
+                    loaded_count += 1
+                except Exception as install_error:
+                    messages.append(f"⚠️  Package {i}/{len(packages)}: '{pkg}' installation failed: {str(install_error)[:60]}")
+                    # Continue anyway - app might work with partial packages
 
-        return True
+        elapsed = (datetime.now() - start_time).total_seconds()
+        messages.append(f"✅ Installation complete in {elapsed:.1f}s ({loaded_count} loaded, {installed_count} newly installed)")
+        return True, messages
+
     except Exception as e:
-        return False
+        messages.append(f"❌ Error during package installation: {str(e)[:100]}")
+        return False, messages
 
 r_is_installed = check_r_installed()
 
@@ -114,8 +138,25 @@ r-base-dev""", language="text")
 
     st.stop()
 else:
-    # Ensure required R packages are installed (cached, runs only once per container)
-    ensure_r_packages()
+    # Package installation with real-time feedback
+    if 'packages_loaded' not in st.session_state:
+        st.session_state.packages_loaded = False
+        st.session_state.package_messages = []
+
+    # Call cached function and capture messages
+    try:
+        success, messages = ensure_r_packages()
+        st.session_state.packages_loaded = success
+        st.session_state.package_messages = messages
+    except Exception as e:
+        st.session_state.packages_loaded = False
+        st.session_state.package_messages = [f"❌ Unexpected error: {str(e)[:100]}"]
+
+    # Display installation feedback to user
+    if st.session_state.package_messages:
+        with st.expander("📦 Package Installation Status", expanded=(not st.session_state.packages_loaded)):
+            for msg in st.session_state.package_messages:
+                st.write(msg)
 
 # Set page config
 st.set_page_config(
