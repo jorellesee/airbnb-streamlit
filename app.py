@@ -190,11 +190,24 @@ def load_models_from_rds():
 
         # Load occupancy model
         model_file = str(models_path / "occupancy_model_final.rds")
+        info_file = str(models_path / "occupancy_model_info.rds")
         occupancy_model = base.readRDS(model_file)
 
-        # Default values for neighborhoods, property types, and test metrics
-        neighborhoods = ["Duomo", "Brera", "Navigli", "Centro Storico", "Corso Como"]
-        property_types = ["Entire home/apt", "Private room"]
+        # Extract all neighborhoods and property types from model data
+        try:
+            ro.r(f'''
+            model_info <- readRDS("{info_file}")
+            orig_data <- model_info$train_data
+            neighborhoods_vec <- sort(unique(orig_data$neighbourhood_cleansed))
+            property_types_vec <- sort(unique(orig_data$property_type))
+            ''')
+            neighborhoods = list(ro.r('neighborhoods_vec'))
+            property_types = list(ro.r('property_types_vec'))
+        except:
+            # Fallback if extraction fails
+            neighborhoods = ["Duomo", "Brera", "Navigli", "Centro Storico", "Corso Como"]
+            property_types = ["Entire home/apt", "Private room"]
+
         test_metrics = {'rmse': 0.163, 'mae': 0.131, 'rsq': 0.504}
 
         model_info_dict = {
@@ -246,7 +259,16 @@ occupancy_model, model_info, models_loaded = load_models_from_rds()
 if not models_loaded or model_info is None:
     st.error("❌ Could not load models. Please ensure occupancy_model_final.rds exists in ./models/")
     model_info = {
-        'neighborhoods': ["Duomo", "Brera", "Navigli", "Centro Storico"],
+        'neighborhoods': ["AFFORI", "BANDE NERE", "BOVISA", "BRERA", "BUENOS AIRES - VENEZIA",
+                         "CENTRALE", "CITTA' STUDI", "CORSICA", "DE ANGELI - MONTE ROSA", "DERGANO",
+                         "DUOMO", "EX OM - MORIVIONE", "FARINI", "GALLARATESE", "GARIBALDI REPUBBLICA",
+                         "GHISOLFA", "GIAMBELLINO", "GRECO", "GUASTALLA", "ISOLA", "LODI - CORVETTO",
+                         "LORETO", "MACIACHINI - MAGGIOLINA", "MAGENTA - S. VITTORE", "MECENATE",
+                         "NAVIGLI", "NIGUARDA - CA' GRANDA", "OTHER", "PADOVA", "PAGANO",
+                         "PARCO LAMBRO - CIMIANO", "PORTA ROMANA", "PORTELLO", "RIPAMONTI",
+                         "RONCHETTO SUL NAVIGLIO", "S. CRISTOFORO", "S. SIRO", "SARPI",
+                         "SCALO ROMANA", "SELINUNTE", "STADERA", "TIBALDI", "TICINESE", "TORTONA",
+                         "UMBRIA - MOLISE", "VIALE MONZA", "VIGENTINA", "VILLAPIZZONE", "WASHINGTON", "XXII MARZO"],
         'property_types': ["Entire home/apt", "Private room"],
         'test_metrics': {'rmse': 0.163, 'mae': 0.131, 'rsq': 0.504}
     }
