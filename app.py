@@ -15,13 +15,30 @@ import shutil
 warnings.filterwarnings('ignore')
 
 # ============================================================================
-# CHECK R INSTALLATION
+# CHECK R INSTALLATION & PACKAGES
 # ============================================================================
 
 def check_r_installed():
     """Check if R is installed on the system"""
     r_executable = shutil.which('R')
     return r_executable is not None
+
+def ensure_r_packages():
+    """Install required R packages if missing"""
+    try:
+        from rpy2 import robjects as ro
+        from rpy2.robjects.packages import importr
+
+        packages_needed = ["tidymodels", "tune"]
+        for pkg in packages_needed:
+            try:
+                importr(pkg)
+            except:
+                st.warning(f"Installing R package: {pkg}...")
+                ro.r(f'install.packages("{pkg}", repos="https://cran.r-project.org/", quiet=TRUE)')
+        return True
+    except Exception as e:
+        return False
 
 r_is_installed = check_r_installed()
 
@@ -70,6 +87,10 @@ r-base-dev""", language="text")
         st.write("(The file should be at the repo root, NOT in the app directory)")
 
     st.stop()
+else:
+    # Ensure required R packages are installed
+    with st.spinner("Checking R packages..."):
+        ensure_r_packages()
 
 # Set page config
 st.set_page_config(
