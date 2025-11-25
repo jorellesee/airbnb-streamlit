@@ -24,18 +24,12 @@ def check_r_installed():
     return r_executable is not None
 
 def ensure_r_packages():
-    """Install required R packages if missing"""
+    """Verify R packages are loaded (pre-installed via packages.txt)"""
     try:
-        from rpy2 import robjects as ro
         from rpy2.robjects.packages import importr
-
-        packages_needed = ["tidymodels", "tune"]
-        for pkg in packages_needed:
-            try:
-                importr(pkg)
-            except:
-                st.warning(f"Installing R package: {pkg}...")
-                ro.r(f'install.packages("{pkg}", repos="https://cran.r-project.org/", quiet=TRUE)')
+        # Just check if packages exist - no installation (too slow)
+        importr("tidymodels")
+        importr("tune")
         return True
     except Exception as e:
         return False
