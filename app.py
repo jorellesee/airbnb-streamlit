@@ -45,7 +45,7 @@ def load_xgboost_model():
 
         # Load XGBoost model (native Python format, no R needed!)
         model_file = str(models_path / "occupancy_model.xgb")
-        occupancy_model = xgb.Booster(model_name="gbtree")
+        occupancy_model = xgb.Booster()
         occupancy_model.load_model(model_file)
 
         # Load metadata
