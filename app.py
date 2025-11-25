@@ -28,22 +28,38 @@ def ensure_r_packages():
     try:
         from rpy2.robjects.packages import importr
         from rpy2 import robjects as ro
+        import os
 
         packages = ["tidymodels", "tune"]
+
+        # Set up writable R library directory (critical for Streamlit Cloud)
+        # Use temp directory or home directory
+        r_lib_dir = os.path.expanduser("~/R_libs")
+        os.makedirs(r_lib_dir, exist_ok=True)
+
+        # Configure R to use writable library path
+        ro.r(f'.libPaths(c("{r_lib_dir}", .libPaths()))')
 
         for pkg in packages:
             try:
                 importr(pkg)
+                st.write(f"✅ {pkg} already loaded")
             except:
                 # Package not found, install it
-                st.warning(f"Installing R package: {pkg}...")
-                ro.r(f'install.packages("{pkg}", repos="https://cloud.r-project.org/", quiet=TRUE)')
-                importr(pkg)
+                st.warning(f"📦 Installing R package: {pkg}...")
+                try:
+                    ro.r(f'install.packages("{pkg}", lib="{r_lib_dir}", repos="https://cloud.r-project.org/", dependencies=TRUE, quiet=TRUE)')
+                    importr(pkg)
+                    st.success(f"✅ {pkg} installed successfully")
+                except Exception as install_err:
+                    st.error(f"⚠️ Could not install {pkg}: {str(install_err)}")
+                    st.info("Attempting to continue anyway...")
 
         return True
     except Exception as e:
-        st.error(f"Failed to load R packages: {str(e)}")
-        return False
+        st.warning(f"⚠️ Package loading error: {str(e)}")
+        st.info("Attempting to continue with available packages...")
+        return True  # Don't fail completely, try to use what's available
 
 r_is_installed = check_r_installed()
 
