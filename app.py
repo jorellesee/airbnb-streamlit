@@ -23,8 +23,9 @@ def check_r_installed():
     r_executable = shutil.which('R')
     return r_executable is not None
 
+@st.cache_resource(show_spinner=False)
 def ensure_r_packages():
-    """Install and verify R packages are loaded"""
+    """Install and verify R packages are loaded (cached across reruns)"""
     try:
         from rpy2.robjects.packages import importr
         from rpy2 import robjects as ro
@@ -33,33 +34,46 @@ def ensure_r_packages():
         packages = ["tidymodels", "tune"]
 
         # Set up writable R library directory (critical for Streamlit Cloud)
-        # Use temp directory or home directory
         r_lib_dir = os.path.expanduser("~/R_libs")
         os.makedirs(r_lib_dir, exist_ok=True)
 
         # Configure R to use writable library path
         ro.r(f'.libPaths(c("{r_lib_dir}", .libPaths()))')
 
+        status_messages = []
+
         for pkg in packages:
             try:
                 importr(pkg)
-                st.write(f"✅ {pkg} already loaded")
+                status_messages.append((pkg, "already_loaded"))
             except:
-                # Package not found, install it
-                st.warning(f"📦 Installing R package: {pkg}...")
+                # Package not found, install it with optimization
                 try:
-                    ro.r(f'install.packages("{pkg}", lib="{r_lib_dir}", repos="https://cloud.r-project.org/", dependencies=TRUE, quiet=TRUE)')
-                    importr(pkg)
-                    st.success(f"✅ {pkg} installed successfully")
-                except Exception as install_err:
-                    st.error(f"⚠️ Could not install {pkg}: {str(install_err)}")
-                    st.info("Attempting to continue anyway...")
+                    # Try using pak first (much faster), fall back to install.packages
+                    try:
+                        # pak::pak() is faster than install.packages
+                        ro.r(f'''
+                        if (!require("pak", quietly=TRUE)) {{
+                            install.packages("pak", lib="{r_lib_dir}", repos="https://cloud.r-project.org/", quiet=TRUE)
+                        }}
+                        pak::pak("{pkg}", lib="{r_lib_dir}")
+                        ''')
+                    except:
+                        # Fallback: use install.packages without dependencies
+                        # Dependencies=FALSE prevents building heavy transitive deps from source
+                        ro.r(f'''
+                        options(timeout=300)
+                        install.packages("{pkg}", lib="{r_lib_dir}", repos="https://cloud.r-project.org/", dependencies=FALSE, quiet=TRUE)
+                        ''')
 
-        return True
+                    importr(pkg)
+                    status_messages.append((pkg, "installed"))
+                except Exception as install_err:
+                    status_messages.append((pkg, f"failed: {str(install_err)[:50]}"))
+
+        return True, status_messages
     except Exception as e:
-        st.warning(f"⚠️ Package loading error: {str(e)}")
-        st.info("Attempting to continue with available packages...")
-        return True  # Don't fail completely, try to use what's available
+        return False, [(f"Error: {str(e)[:100]}", "error")]
 
 r_is_installed = check_r_installed()
 
@@ -109,9 +123,10 @@ r-base-dev""", language="text")
 
     st.stop()
 else:
-    # Ensure required R packages are installed
-    with st.spinner("Checking R packages..."):
-        ensure_r_packages()
+    # Ensure required R packages are installed (cached, runs only once per container)
+    success, messages = ensure_r_packages()
+    if not success:
+        st.warning("⚠️ Warning: Some R packages could not be loaded. The app may have limited functionality.")
 
 # Set page config
 st.set_page_config(
