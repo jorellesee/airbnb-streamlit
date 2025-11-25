@@ -11,7 +11,65 @@ from pathlib import Path
 import json
 import warnings
 import subprocess
+import shutil
 warnings.filterwarnings('ignore')
+
+# ============================================================================
+# CHECK R INSTALLATION
+# ============================================================================
+
+def check_r_installed():
+    """Check if R is installed on the system"""
+    r_executable = shutil.which('R')
+    return r_executable is not None
+
+r_is_installed = check_r_installed()
+
+if not r_is_installed:
+    st.error("""
+    ❌ **R is not installed on this system**
+
+    This app requires R and the following R packages:
+    - tidymodels
+    - stats
+    - tune
+
+    ### To install R:
+    - **macOS**: `brew install r`
+    - **Ubuntu/Debian**: `sudo apt-get install r-base r-base-dev`
+    - **Windows**: Download from https://cran.r-project.org/bin/windows/base/
+
+    ### After installing R, install R packages:
+    ```r
+    install.packages("tidymodels")
+    install.packages("tune")
+    ```
+
+    After installation, please restart this app.
+    """)
+
+    # Diagnostic info
+    with st.expander("📋 Diagnostic Information"):
+        st.write("**System Information:**")
+        try:
+            import platform
+            st.write(f"- Platform: {platform.system()}")
+            st.write(f"- Architecture: {platform.machine()}")
+            st.write(f"- Python: {platform.python_version()}")
+        except:
+            pass
+
+        st.write("**R Status:**")
+        st.write(f"- R executable found: {r_is_installed}")
+        st.write(f"- PATH location: {shutil.which('R')}")
+
+        st.write("**If using Streamlit Cloud:**")
+        st.write("Ensure `packages.txt` in your repo root contains:")
+        st.code("""r-base
+r-base-dev""", language="text")
+        st.write("(The file should be at the repo root, NOT in the app directory)")
+
+    st.stop()
 
 # Set page config
 st.set_page_config(
